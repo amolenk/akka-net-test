@@ -6,7 +6,10 @@ using System.Threading.Tasks;
 
 namespace AkkaTest
 {
-    public class StartRealTime
+    public class ActorNames
     {
+        public const string DriverSibling = "../driver";
+
+        public const string ConsoleWriter = "/user/consoleWriter";
     }
 }

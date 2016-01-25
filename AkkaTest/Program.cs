@@ -17,10 +17,14 @@ namespace AkkaTest
             // Create a new actor system (a container for your actors)
             var system = ActorSystem.Create("MySystem");
 
+            var consoleWriterActor = system.ActorOf<ConsoleWriterActor>("consoleWriter");
+
+
             // Create your actor and get a reference to it.
             // This will be an "IActorRef", which is not a reference to the actual actor
             // instance but rather a client or proxy to it.
             var meter = system.ActorOf<MeterActor>("meter");
+
 
             //Task.Run(async () =>
             //{

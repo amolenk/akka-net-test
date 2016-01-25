@@ -2,6 +2,7 @@
 using ColorConsole;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -9,158 +10,314 @@ using System.Threading.Tasks;
 
 namespace AkkaTest
 {
+    // TODO Disconnect when work is done.
+
     public class DriverActor : ReceiveActor, IWithUnboundedStash
     {
         #region Message Types
 
-        public class ReadingsAvailable
+        public class ConnectionEstablished
         {
-            public ReadingsAvailable(string channel)
+        }
+
+        public class ConnectionFailed
+        {
+            public ConnectionFailed(Exception exception)
             {
-                this.Channel = channel;
+                this.Exception = exception;
             }
 
-            public string Channel { get; private set; }
+            public Exception Exception { get; set; }
+        }
+
+        public class ConnectionTerminated
+        {
+            public ConnectionTerminated(bool errorOccured)
+            {
+                this.ErrorOccured = errorOccured;
+            }
+
+            public bool ErrorOccured { get; set; }
+        }
+
+        public class ReadChannel
+        {
+            public ReadChannel(string channelName)
+            {
+                this.ChannelName = channelName;
+            }
+
+            public string ChannelName { get; set; }
+        }
+
+        public class ReadChannelPeriod
+        {
+        }
+
+        public class ReadingsAvailable
+        {
+            public ReadingsAvailable(string channelName)
+            {
+                this.ChannelName = channelName;
+            }
+
+            public string ChannelName { get; private set; }
+        }
+
+        public class ReadChannelFailed
+        {
+            public ReadChannelFailed(Exception exception)
+            {
+                this.Exception = exception;
+            }
+
+            public Exception Exception { get; set; }
+        }
+
+        public class Retry
+        {
+        }
+
+        public class Retrying
+        {
         }
 
         #endregion
 
-        private readonly IMeterDriver _meterDriver = new FakeMeterDriver();
-        private readonly IConsoleWriter _consoleWriter = new ConsoleWriter();
+        /// <summary>
+        /// The maximum number of read requests to keep queued.
+        /// </summary>
+        private const int MAX_QUEUED_READ_REQUESTS = 10;
 
-        private Task _currentAsyncTask;
-        private CancellationTokenSource _cts;
+        private readonly IMeterDriver _driver;
 
-        public DriverActor()
+        private int _queuedReadRequestCount;
+
+        public DriverActor(IMeterDriver driver)
         {
-            _consoleWriter = new ConsoleWriter();
+            _driver = driver;
 
-            this.Idle();
+            this.DisconnectedState();
         }
 
         public IStash Stash { get; set; }
 
-        #region Behaviour Methods
-
-        private void Idle()
+        public static Props CreateProps(IMeterDriver driver)
         {
-            _consoleWriter.WriteLine("State: Idle", ConsoleColor.Yellow);
-
-            Receive<ReadChannel>(msg => this.Connect(msg));
+            return Props.Create(() => new DriverActor(driver));
         }
 
-        private void Connecting()
+        protected override void PostRestart(Exception reason)
         {
-            _consoleWriter.WriteLine("State: Connecting", ConsoleColor.Yellow);
+            base.PostRestart(reason);
 
-            Receive<Connected>(msg => this.WhenConnected(msg));
-            ReceiveAny(msg =>
+            Stash.UnstashAll();
+        }
+
+        private void DisconnectedState()
+        {
+            Receive<ReadChannel>(msg =>
             {
-                _consoleWriter.WriteLine("Stashing because Connecting: " + msg, ConsoleColor.Red);
-                this.Stash.Stash();
+                this.EnqueueReadRequest();
+                this.BeginConnect();
+            });
+
+            Receive<ReadChannelPeriod>(msg =>
+            {
+                this.EnqueueReadRequest();
+                this.BeginConnect();
             });
         }
 
-        private void Connected()
+        private void ConnectingState()
         {
-            _consoleWriter.WriteLine("State: Connected", ConsoleColor.Yellow);
+            Receive<ConnectionEstablished>(msg =>
+            {
+                Become(ConnectedState);
 
-            Receive<ReadChannel>(msg => this.ReadChannel(msg));
+                this.TryDequeueReadRequest();
+            });
+
+            Receive<ConnectionFailed>(_ =>
+            {
+                File.WriteAllText(@"C:\Users\Sander\Downloads\ConnectionFailed.txt", "Foo");
+
+                this.RetryAfterWaitTime();
+            });
+
+            Receive<ReadChannel>(_ => this.EnqueueReadRequest());
+            Receive<ReadChannelPeriod>(_ => this.EnqueueReadRequest());
         }
 
-        private void Busy()
+        private void ConnectedState()
         {
-            _consoleWriter.WriteLine("State: Busy", ConsoleColor.Yellow);
+            Context.ActorSelection(ActorNames.ConsoleWriter).Tell(new ConsoleWriterActor.Write(
+                ConsoleColor.Yellow, "State: Connected"));
 
-            Receive<ReadingAvailable>(msg => this.WhenReadingAvailable(msg));
-
-            Receive<ReadingsAvailable>(msg =>
+            Receive<ReadChannel>(msg =>
             {
+                Context.ActorSelection(ActorNames.ConsoleWriter).Tell(new ConsoleWriterActor.Write(
+                    ConsoleColor.DarkGreen, "Reading channel: " + msg.ChannelName));
+
+                Become(ReadingState);
+
+                var senderClosure = this.Sender;
+
+                Task.Run(() => _driver.ReadChannelAsync(msg.ChannelName, CancellationToken.None))
+                    .ContinueWith(task =>
+                    {
+                        object message = null;
+
+                        if (task.IsFaulted)
+                        {
+                            message = new ReadChannelFailed(task.Exception);
+                        }
+                        else
+                        {
+                            message = new ReadingsAvailable(msg.ChannelName);
+                        }
+
+                        return message;
+                    },
+                    TaskContinuationOptions.AttachedToParent & TaskContinuationOptions.ExecuteSynchronously)
+                    .PipeTo(Self, senderClosure);
+            });
+
+            // TODO ReadChannelPeriod
+        }
+
+        private void DisconnectingState()
+        {
+            Receive<ConnectionTerminated>(msg =>
+            {
+                if (msg.ErrorOccured)
+                {
+                    this.RetryAfterWaitTime();
+                }
+                else
+                {
+                    Become(DisconnectedState);
+
+                    this.TryDequeueReadRequest();
+                }
+            });
+
+            Receive<ReadChannel>(_ => this.EnqueueReadRequest());
+            Receive<ReadChannelPeriod>(_ => this.EnqueueReadRequest());
+        }
+
+        private void ReadingState()
+        {
+            Context.ActorSelection(ActorNames.ConsoleWriter).Tell(new ConsoleWriterActor.Write(
+                ConsoleColor.Yellow, "State: Reading"));
+
+            Receive((ReadingsAvailable msg) =>
+            {
+                Context.ActorSelection(ActorNames.ConsoleWriter).Tell(new ConsoleWriterActor.Write(
+                    ConsoleColor.Green, "Reading available: " + msg.ChannelName));
+
                 Sender.Tell(msg);
 
-                Become(Connected);
-                Stash.Unstash();
+                Become(this.ConnectedState);
+
+                this.TryDequeueReadRequest();
             });
 
-            ReceiveAny(msg =>
+            Receive<ReadChannelFailed>(_ =>
             {
-                _consoleWriter.WriteLine("Stashing because Busy: " + msg, ConsoleColor.Red);
-                this.Stash.Stash();
+                BeginDisconnect(true);
             });
+
+            Receive<ReadChannel>(_ => this.EnqueueReadRequest());
+            Receive<ReadChannelPeriod>(_ => this.EnqueueReadRequest());
         }
 
-        #endregion
-
-        #region Command Handlers
-
-        private void Connect(object message)
+        private void ErrorState()
         {
-            Become(Connecting);
-            Stash.Stash();
+            // TODO Notify parent of error (also notify when next succesful call has happened)
 
-            _meterDriver
-                .ConnectAsync(CancellationToken.None)
-                .ContinueWith(task =>
-                {
-                    // TODO Different message if faulted.
-                    return new Connected();
-                })
-                .PipeTo(Self);
+            Context.ActorSelection(ActorNames.ConsoleWriter).Tell(new ConsoleWriterActor.Write(
+                ConsoleColor.Red, "State: Error"));
+
+            Receive<Retry>(_ =>
+            {
+                Become(DisconnectedState);
+
+                this.TryDequeueReadRequest();
+            });
+
+            Receive<ReadChannel>(_ => this.EnqueueReadRequest());
+            Receive<ReadChannelPeriod>(_ => this.EnqueueReadRequest());
         }
 
-        private void ReadChannel(ReadChannel message)
+        #region Private Helper Methods
+
+        private void RetryAfterWaitTime()
         {
-            _consoleWriter.WriteLine("Reading channel: " + message.Channel, ConsoleColor.DarkGreen);
+            Become(ErrorState);
 
-            Become(Busy);
+            //Self.Tell(new Retry());
 
+            Context.System.Scheduler.ScheduleTellOnce(TimeSpan.FromSeconds(30), Self, new Retry(), Self);
 
-            var senderClosure = this.Sender;
+            Sender.Tell(new Retrying());
 
-            _cts = new CancellationTokenSource();
-            _currentAsyncTask = _meterDriver
-                .ReadChannelAsync(message.Channel, _cts.Token)
+            //Context.System.Scheduler.ScheduleTellOnce(TimeSpan.FromSeconds(0), Self, new Retry(), Self);
+        }
+
+        private void BeginConnect()
+        {
+            Become(ConnectingState);
+
+            var senderClosure = Sender;
+
+            Task.Run(() => _driver.ConnectAsync(CancellationToken.None))
                 .ContinueWith(task =>
                 {
-                    if (task.IsCanceled)
+                    if (task.IsFaulted)
                     {
-                        Console.WriteLine("CANCELED!!!");
-                        return new ReadingsAvailable("CANCELED");
+                        return (object)new ConnectionFailed(task.Exception);
                     }
-
-                    // TODO Different message if faulted.
-                    return new ReadingsAvailable(task.Result.First());
-                }, 
+                    else
+                    {
+                        return (object)new ConnectionEstablished();
+                    }
+                },
                 TaskContinuationOptions.AttachedToParent & TaskContinuationOptions.ExecuteSynchronously)
                 .PipeTo(Self, senderClosure);
         }
 
-        #endregion
-
-        protected override void PostStop()
+        private void BeginDisconnect(bool errorOccured)
         {
-            _cts?.Cancel();
-            _currentAsyncTask.Wait();
+            Become(DisconnectingState);
 
-            base.PostStop();
+            _driver
+                .CloseAsync()
+                .ContinueWith(task => new ConnectionTerminated(errorOccured),
+                    TaskContinuationOptions.AttachedToParent & TaskContinuationOptions.ExecuteSynchronously)
+                .PipeTo(Self);
         }
 
-        #region Event Handlers
-
-        private void WhenConnected(Connected message)
+        private void EnqueueReadRequest()
         {
-            Become(Connected);
-            Stash.Unstash();
+            if (_queuedReadRequestCount < MAX_QUEUED_READ_REQUESTS)
+            {
+                Stash.Stash();
+                _queuedReadRequestCount += 1;
+            }
         }
 
-        private void WhenReadingAvailable(ReadingAvailable message)
+        private void TryDequeueReadRequest()
         {
-            _consoleWriter.WriteLine("Reading available: " + message.Channel, ConsoleColor.Green);
-
-            message.Actor.Tell(message);
-
-            Become(Connected);
-            Stash.Unstash();
+            if (_queuedReadRequestCount > 0)
+            {
+                Stash.Unstash();
+                _queuedReadRequestCount -= 1;
+            }
+            else
+            {
+                // TODO Schedule disconnect?
+            }
         }
 
         #endregion

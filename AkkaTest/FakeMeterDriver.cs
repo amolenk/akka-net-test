@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,6 +10,8 @@ namespace AkkaTest
 {
     public class FakeMeterDriver : IMeterDriver
     {
+        private int count;
+
         public Task CloseAsync()
         {
             return Task.CompletedTask;
@@ -16,7 +19,8 @@ namespace AkkaTest
 
         public Task ConnectAsync(CancellationToken cancellationToken)
         {
-            return Task.CompletedTask;
+            return this.ExecuteHttpRequest(0);
+
         }
 
         public Task<ICollection<string>> GetChannelNamesAsync(CancellationToken cancellationToken)
@@ -30,7 +34,12 @@ namespace AkkaTest
 
         public async Task<ICollection<string>> ReadChannelAsync(string channelName, CancellationToken cancellationToken)
         {
-            await Task.Delay(15000, cancellationToken);
+            if (++count == 3)
+            {
+                throw new Exception("ReadChannelAsync error");
+            }
+
+            await this.ExecuteHttpRequest(0);
 
             return new string[] { "readChannelResult" };
         }
@@ -48,6 +57,16 @@ namespace AkkaTest
         public Task SynchronizeClockAsync(CancellationToken cancellationToken)
         {
             return Task.CompletedTask;
+        }
+
+        private async Task ExecuteHttpRequest(int seconds)
+        {
+            var address = "https://httpbin.org/delay/" + seconds;
+
+            using (var client = new HttpClient())
+            {
+                await client.GetAsync(address).ConfigureAwait(false);
+            }
         }
     }
 }

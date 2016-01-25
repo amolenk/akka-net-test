@@ -37,8 +37,9 @@
       <HintPath>..\packages\Akka.1.0.6\lib\net45\Akka.dll</HintPath>
       <Private>True</Private>
     </Reference>
-    <Reference Include="ColorConsole">
+    <Reference Include="ColorConsole, Version=1.0.1.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\ColorConsole.1.0.1\lib\net40\ColorConsole.dll</HintPath>
+      <Private>True</Private>
     </Reference>
     <Reference Include="Newtonsoft.Json, Version=7.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
       <HintPath>..\packages\Newtonsoft.Json.7.0.1\lib\net45\Newtonsoft.Json.dll</HintPath>
@@ -54,18 +55,17 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Connected.cs" />
+    <Compile Include="ActorNames.cs" />
+    <Compile Include="ConsoleWriterActor.cs" />
+    <Compile Include="ReliableCollectorActor.cs" />
+    <Compile Include="CollectorActor.cs" />
     <Compile Include="FakeMeterDriver.cs" />
-    <Compile Include="ForActor.cs" />
     <Compile Include="IMeterDriver.cs" />
     <Compile Include="DriverActor.cs" />
     <Compile Include="MeterActor.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="ReadingAvailable.cs" />
-    <Compile Include="ReadChannel.cs" />
-    <Compile Include="RealTimeActor.cs" />
-    <Compile Include="StartRealTime.cs" />
+    <Compile Include="PublisherActor.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />

@@ -10,26 +10,44 @@ namespace AkkaTest
 {
     public class MeterActor : ReceiveActor
     {
-        private readonly IConsoleWriter _consoleWriter = new ConsoleWriter();
+        private IActorRef _publisherActor;
+        private IActorRef _driverActor;
 
         public MeterActor()
         {
-            _consoleWriter = new ConsoleWriter();
-
             this.Initialize();
+            this.CreateChildren();
         }
 
         private void Initialize()
         {
-            var driverActor = Context.ActorOf<DriverActor>("driver");
-            //   driverActor.Tell(new ReadChannel("Foo"));
+            Receive<CollectorActor.ReadingsCollected>(msg =>
+            {
+                _publisherActor.Tell(new PublisherActor.Publish());
+            });
 
-            //Task.Delay(1000).Wait();
+            Receive<ReliableCollectorActor.ReadingsCollected>(msg =>
+            {
+                _publisherActor.Tell(new PublisherActor.PublishWithAck(), Sender);
+            });
+        }
 
-            var realTimeActor = Context.ActorOf<RealTimeActor>("realTime");
-            realTimeActor.Tell(new StartRealTime());
+        private void CreateChildren()
+        {
+            _publisherActor = Context.ActorOf<PublisherActor>("publisher");
 
-            //realTimeActor.Tell(new RealTimeActor.Stop());
+            _driverActor = Context.ActorOf(DriverActor.CreateProps(
+                new FakeMeterDriver()), "driver");
+
+            var collectorActor = Context.ActorOf(CollectorActor.CreateProps(
+                "SomeRegister", TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10)));
+
+            collectorActor.Tell(new CollectorActor.Start());
+
+            var reliableCollectorActor = Context.ActorOf(ReliableCollectorActor.CreateProps(
+                "SomeProfile", TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(10)));
+
+            reliableCollectorActor.Tell(new ReliableCollectorActor.Start());
         }
     }
 }

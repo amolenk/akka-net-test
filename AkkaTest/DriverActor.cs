@@ -78,8 +78,14 @@ namespace AkkaTest
         {
         }
 
-        public class Retrying
+        public class ErrorOccured
         {
+            public ErrorOccured(TimeSpan retryWaitTime)
+            {
+                this.RetryWaitTime = retryWaitTime;
+            }
+
+            public TimeSpan RetryWaitTime { get; set; }
         }
 
         #endregion
@@ -256,13 +262,11 @@ namespace AkkaTest
         {
             Become(ErrorState);
 
-            //Self.Tell(new Retry());
+            var retryWaitTime = TimeSpan.FromSeconds(30);
 
-            Context.System.Scheduler.ScheduleTellOnce(TimeSpan.FromSeconds(30), Self, new Retry(), Self);
+            Context.System.Scheduler.ScheduleTellOnce(retryWaitTime, Self, new Retry(), Self);
 
-            Sender.Tell(new Retrying());
-
-            //Context.System.Scheduler.ScheduleTellOnce(TimeSpan.FromSeconds(0), Self, new Retry(), Self);
+            Context.Parent.Tell(new ErrorOccured(retryWaitTime));
         }
 
         private void BeginConnect()

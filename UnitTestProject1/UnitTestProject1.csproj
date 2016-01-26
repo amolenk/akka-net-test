@@ -91,6 +91,7 @@
   <ItemGroup>
     <Compile Include="DriverActorFixture.cs" />
     <Compile Include="CollectorActorFixture.cs" />
+    <Compile Include="MeterDriverFake.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
